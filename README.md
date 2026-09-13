@@ -1,135 +1,64 @@
 # Gemini Compose+
 
-**Roll number C048 · Mobile Application Development Assignment 1**
+**C048 · Mobile Application Development — Assignment 1**
 
-Gemini Compose+ is an upgraded Gemini chat built entirely with Kotlin and Jetpack Compose. Its differentiator is transparent context: users can see approximate request size, exclude private messages from future AI requests, and protect important details during context trimming.
+A Gemini chat application built with Kotlin and Jetpack Compose. It extends the starter project with persistent chats, user-controlled context, voice input, response tools, and privacy settings.
 
-## Highlights
+## Features
 
-- Premium Material 3 LazyColumn chat with stable Room IDs, timestamps, adaptive layout, dark mode, loading, retry, and safe auto-scroll
-- Genuine multi-turn Gemini requests behind a repository interface
-- Immutable StateFlow ChatUiState, lifecycle-aware collection, and stateless screen composables
-- In-app voice-to-draft input through Android SpeechRecognizer, configured with RecognizerIntent
-- Room-backed messages/request states and DataStore-backed draft/instructions
-- Multi-conversation workspace with independent histories, rename/delete controls, and recent-chat navigation
-- Per-chat privacy policies: Connected, Protected memory, and fully isolated Confidential mode
-- Persistent System, Light, and Dark appearance modes with dynamic-color support
-- Context Health Meter, Memory Firewall, and Important Detail Protection
-- Persistent custom AI instructions and allowed-context chat summaries
-- Lightweight native Markdown for headings, lists, quotes, links, and copyable code blocks
-- Answer utility bar: copy, share, queued read-aloud with an immediate stop control, regenerate, and compare response variants
-- Expandable Answer Insights showing the real request context, Memory Firewall activity, input source, and capability use
-- Honest confidence status: Gemini does not expose a dependable numeric confidence score, so the app never fabricates one
-- Local follow-up suggestions for the latest response and collapsible rendering for long answers
-- Privacy & Security Center with credential status and deletion controls
-- AES-256-GCM key encryption using Android Keystore
-- Slash commands: /summarize, /formal, and /reset-instructions
-- R8 minification/resource shrinking plus unit and Compose UI tests
+### Chat interface
 
-## Requirements
+Material 3 chat with responsive layout, loading states, retries, and multi-turn history. Messages remain available locally after the app is restarted.
 
-- Android Studio with JDK 17
-- Android SDK 35
-- Android 8.0 / API 26 or newer device
-- Gemini API key for live responses
+<img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/01-welcome.png" alt="Welcome screen" width="38%" />
+<img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/02-chat-context.png" alt="Chat with context status" width="38%" />
 
-The project contains no handwritten Java. Room/KSP may generate interoperable sources during a build.
+### Context controls
 
-## API-key setup
+Check the approximate request size before sending. Each message can be used normally, hidden from Gemini, or protected so it is prioritised when context is trimmed.
 
-1. Copy local.properties.example to local.properties in the repository root.
-2. Keep the sdk.dir line Android Studio creates and add:
+<img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/03-context-controls.png" alt="Context controls" width="38%" />
 
-~~~properties
-GEMINI_API_KEY=replace_with_your_own_key
-~~~
+### Conversation summary
 
-3. Sync and rebuild.
+`/summarize` creates a local summary using only allowed messages. Hidden messages are never included in the summary request.
 
-If the property is absent, Gradle checks the GEMINI_API_KEY environment variable. If neither exists, the project still builds and tests without a secret; a safe setup error appears only when a live request is attempted.
+<img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/12-summary.png" alt="Conversation summary" width="38%" />
 
-local.properties is ignored by Git. Never place a key in Kotlin, XML, README files, screenshots, logs, or commits. Revoke any key that was ever posted publicly.
+### Privacy settings
 
-## Security model
+Choose Connected, Protected memory, or Confidential mode for each chat. The selected mode controls whether details may be reused across conversations.
 
-At first launch, the app creates a 256-bit AES key inside Android Keystore and encrypts the configured Gemini key with AES/GCM/NoPadding. Only ciphertext and its non-secret IV are stored in a dedicated Preferences DataStore. The repository decrypts it in memory immediately before a Gemini call. The encrypted record is excluded from backup, and app backup is disabled.
+<img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/04-privacy-security.png" alt="Privacy and security settings" width="38%" />
 
-This protects data at rest, not perfect client-side secrecy. A key compiled into a mobile app can be extracted from its APK or inspected at runtime. A production app should use an authenticated backend, restrict and rotate keys, rate-limit requests, and consider Firebase App Check. R8 is defence in depth, not a secret vault.
+### Multiple conversations
 
-The starter Google AI client SDK is retained for assignment compatibility behind GeminiRepository. Firebase AI Logic is the intended future production migration point.
+Create, rename, delete, and switch between saved chats. Each chat keeps its own messages and privacy setting.
 
-## Context rules
+<img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/05-chat-drawer.png" alt="Multiple chat drawer" width="38%" />
 
-Messages are ordered by timestamp and stable ID. Failed requests, summaries, and excluded messages are removed before a request. Protected details are reserved first; newest ordinary messages fill the remaining conservative 24,000-token app budget. The current draft is sent exactly once.
+### Appearance
 
-The meter is explicitly approximate and does not claim to expose Gemini's tokenizer. API context-limit errors are handled separately.
+Switch between system, light, and dark themes. The selected appearance is saved for the next launch.
 
-Summaries use only Included or Protected messages. They are stored locally as excluded artifacts and never recursively sent back to Gemini.
+<img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/11-theme-picker.png" alt="Theme picker" width="38%" />
 
-## Build and test
+### Voice typing
 
-~~~powershell
-.\gradlew.bat testDebugUnitTest
-.\gradlew.bat lint
-.\gradlew.bat assembleDebug
-.\gradlew.bat assembleRelease
-~~~
+Speak a message, review the draft, then send it when ready. Voice input never sends a message automatically.
 
-Run instrumented tests with a device/emulator:
+<img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/10-microphone-permission.png" alt="Voice input permission" width="38%" />
 
-~~~powershell
-.\gradlew.bat connectedDebugAndroidTest
-~~~
+### Response tools
 
-Voice input requests microphone permission when first used and needs an installed Android speech service. Tap **Voice typing**, allow microphone access, speak, and tap **Stop listening** if you finish early. Recognized text becomes an editable draft and is never sent automatically.
+Copy, share, read aloud, stop playback, regenerate, inspect, and continue a response. Quick suggestion chips make it easy to ask for a simpler explanation or an example.
 
-For an emulator, enable host microphone input in **Extended controls > Microphone**. Speech recognition also needs internet access unless the selected language's offline speech pack is installed. A physical device is recommended for the final voice demo.
+<img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/06-response-tools.jpg" alt="Response tools" width="38%" />
+<img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/07-quick-actions.png" alt="Quick response actions" width="38%" />
 
-## Assignment checklist
+### Sharing and insights
 
-- [x] Kotlin, Jetpack Compose, Material 3
-- [x] LazyColumn, stable keys, controlled auto-scroll
-- [x] StateFlow and collectAsStateWithLifecycle
-- [x] Stateless UI with hoisted callbacks
-- [x] Loading, validation, typed errors, retry
-- [x] Window-size adaptive layout and API 26 theme fallback
-- [x] RecognizerIntent voice input
-- [x] Preferences DataStore and Room persistence
-- [x] Local property/environment API-key fallback and blank example
-- [x] AES-256-GCM Android Keystore persistence
-- [x] ViewModel, context, and Compose tests
-- [x] R8/resource shrinking release build
-- [x] Honest security documentation
+Share an answer using the Android share sheet, or open Answer Insights to see the context and capabilities used. The app labels confidence honestly instead of inventing a score.
 
-## Competition demo
-
-1. Send two related prompts to demonstrate real multi-turn context.
-2. Exclude one message and open the Context Drawer.
-3. Protect an important detail and show the counters.
-4. Add and reset custom instructions.
-5. Summarize the allowed chat.
-6. Use voice input and edit the resulting draft.
-7. Restart to show persisted history and draft.
-8. Open Privacy & Security Center.
-9. Resize to tablet width to reveal the context rail.
-10. Open Answer Insights, regenerate a response, compare both variants, and try copy/share/read-aloud.
-
-Use synthetic demo data only.
-
-## Git and pull request
-
-Development branch: C048-development
-
-~~~powershell
-git status
-git add .
-git diff --cached
-git commit -m "C048: complete Gemini Compose+ assignment"
-git push -u origin C048-development
-~~~
-
-Create a pull request in codezxsWIN/C048-GeminiComposePlus from C048-development into master titled:
-
-> C048: Build Gemini Compose+ upgraded chat experience
-
-Exclude local.properties, build folders, signing files, logs, and real user data from the final ZIP.
+<img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/08-sharing.png" alt="Response sharing" width="38%" />
+<img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/09-answer-insights.png" alt="Answer insights" width="38%" />
