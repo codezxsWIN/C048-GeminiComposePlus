@@ -36,6 +36,24 @@ class ContextAssemblerTest {
         assertTrue(result.protectedOverflow)
     }
 
+    @Test fun orphanModelIsDroppedAndConsecutiveRolesAreNormalized() {
+        val result = ContextAssembler.assemble(
+            listOf(
+                message(1, "hidden question", ContextStatus.EXCLUDED),
+                message(2, "orphan answer", role = MessageRole.MODEL),
+                message(3, "first user detail"),
+                message(4, "second user detail"),
+                message(5, "valid answer", role = MessageRole.MODEL),
+            ),
+            null, "next question", "",
+        )
+
+        assertEquals(listOf(ChatRole.USER, ChatRole.MODEL), result.history.map { it.role })
+        assertFalse(result.history.any { "orphan answer" in it.text })
+        assertEquals("first user detail\n\nsecond user detail", result.history.first().text)
+        assertTrue(result.trimmedCount >= 1)
+    }
+
     private fun message(
         id: Long,
         text: String,

@@ -33,7 +33,9 @@ object ContextAssembler {
                 it.isSelectedVariant &&
                 it.contextStatus != ContextStatus.EXCLUDED.name
         }
-        val excludedCount = ordered.count { it.contextStatus == ContextStatus.EXCLUDED.name }
+        val excludedCount = ordered.count {
+            it.role != MessageRole.SUMMARY.name && it.contextStatus == ContextStatus.EXCLUDED.name
+        }
         val protected = eligible.filter { it.contextStatus == ContextStatus.PROTECTED.name }
         val baseChars = currentText.length + customInstructions.length
         val protectedChars = protected.sumOf { it.text.length + 16 }
@@ -52,7 +54,7 @@ object ContextAssembler {
             }
         }
         val selectedIds = (protected + selectedOrdinary).mapTo(mutableSetOf()) { it.id }
-        val context = eligible.filter { it.id in selectedIds }.mapNotNull {
+        val selectedContext = eligible.filter { it.id in selectedIds }.mapNotNull {
             val role = when (it.role) {
                 MessageRole.USER.name -> ChatRole.USER
                 MessageRole.MODEL.name -> ChatRole.MODEL
@@ -60,16 +62,33 @@ object ContextAssembler {
             }
             role?.let { roleValue -> ContextMessage(it.id, roleValue, it.text) }
         }
+        val (context, invalidLeadingCount) = normalizeForChatHistory(selectedContext)
         val serializedChars = baseChars + context.sumOf { it.text.length + 16 }
         return ContextSnapshot(
             history = context,
             estimatedTokens = estimate(serializedChars),
             protectedCount = protected.size,
             excludedCount = excludedCount,
-            trimmedCount = eligible.size - context.size,
+            trimmedCount = eligible.size - selectedIds.size + invalidLeadingCount,
             protectedOverflow = false,
         )
     }
 
     private fun estimate(chars: Int) = ceil(chars / CHARS_PER_TOKEN).toInt()
+
+    /** Gemini chat history must begin with a user turn and remain role-normalized. */
+    private fun normalizeForChatHistory(messages: List<ContextMessage>): Pair<List<ContextMessage>, Int> {
+        val withoutLeadingModels = messages.dropWhile { it.role == ChatRole.MODEL }
+        val dropped = messages.size - withoutLeadingModels.size
+        val normalized = mutableListOf<ContextMessage>()
+        for (message in withoutLeadingModels) {
+            val previous = normalized.lastOrNull()
+            if (previous?.role == message.role) {
+                normalized[normalized.lastIndex] = previous.copy(text = previous.text + "\n\n" + message.text)
+            } else {
+                normalized += message
+            }
+        }
+        return normalized to dropped
+    }
 }

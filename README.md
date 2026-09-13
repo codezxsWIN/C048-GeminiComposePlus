@@ -9,10 +9,18 @@ Gemini Compose+ is an upgraded Gemini chat built entirely with Kotlin and Jetpac
 - Premium Material 3 LazyColumn chat with stable Room IDs, timestamps, adaptive layout, dark mode, loading, retry, and safe auto-scroll
 - Genuine multi-turn Gemini requests behind a repository interface
 - Immutable StateFlow ChatUiState, lifecycle-aware collection, and stateless screen composables
-- Voice-to-draft input through Android RecognizerIntent
+- In-app voice-to-draft input through Android SpeechRecognizer, configured with RecognizerIntent
 - Room-backed messages/request states and DataStore-backed draft/instructions
+- Multi-conversation workspace with independent histories, rename/delete controls, and recent-chat navigation
+- Per-chat privacy policies: Connected, Protected memory, and fully isolated Confidential mode
+- Persistent System, Light, and Dark appearance modes with dynamic-color support
 - Context Health Meter, Memory Firewall, and Important Detail Protection
 - Persistent custom AI instructions and allowed-context chat summaries
+- Lightweight native Markdown for headings, lists, quotes, links, and copyable code blocks
+- Answer utility bar: copy, share, queued read-aloud with an immediate stop control, regenerate, and compare response variants
+- Expandable Answer Insights showing the real request context, Memory Firewall activity, input source, and capability use
+- Honest confidence status: Gemini does not expose a dependable numeric confidence score, so the app never fabricates one
+- Local follow-up suggestions for the latest response and collapsible rendering for long answers
 - Privacy & Security Center with credential status and deletion controls
 - AES-256-GCM key encryption using Android Keystore
 - Slash commands: /summarize, /formal, and /reset-instructions
@@ -73,7 +81,9 @@ Run instrumented tests with a device/emulator:
 .\gradlew.bat connectedDebugAndroidTest
 ~~~
 
-Voice input needs an installed speech service. Recognized text becomes an editable draft and is never sent automatically.
+Voice input requests microphone permission when first used and needs an installed Android speech service. Tap **Voice typing**, allow microphone access, speak, and tap **Stop listening** if you finish early. Recognized text becomes an editable draft and is never sent automatically.
+
+For an emulator, enable host microphone input in **Extended controls > Microphone**. Speech recognition also needs internet access unless the selected language's offline speech pack is installed. A physical device is recommended for the final voice demo.
 
 ## Assignment checklist
 
@@ -102,6 +112,7 @@ Voice input needs an installed speech service. Recognized text becomes an editab
 7. Restart to show persisted history and draft.
 8. Open Privacy & Security Center.
 9. Resize to tablet width to reveal the context rail.
+10. Open Answer Insights, regenerate a response, compare both variants, and try copy/share/read-aloud.
 
 Use synthetic demo data only.
 

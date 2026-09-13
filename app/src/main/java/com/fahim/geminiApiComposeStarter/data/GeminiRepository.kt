@@ -16,6 +16,7 @@ sealed interface GeminiFailure {
     data object Offline : GeminiFailure { override val userMessage = "You're offline. Your chat is saved; reconnect and retry." }
     data object Timeout : GeminiFailure { override val userMessage = "Gemini took too long to respond. Please retry." }
     data object Authentication : GeminiFailure { override val userMessage = "The Gemini API key was rejected." }
+    data object ModelUnavailable : GeminiFailure { override val userMessage = "This Gemini model is unavailable. Update the model configuration and retry." }
     data object Quota : GeminiFailure { override val userMessage = "Gemini quota is temporarily unavailable." }
     data object Blocked : GeminiFailure { override val userMessage = "Gemini could not answer this request safely." }
     data object ContextTooLarge : GeminiFailure { override val userMessage = "This request exceeds the model context limit." }

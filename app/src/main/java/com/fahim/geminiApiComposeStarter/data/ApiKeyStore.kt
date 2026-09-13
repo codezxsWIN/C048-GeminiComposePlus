@@ -53,20 +53,24 @@ class ApiKeyStore(private val context: Context) {
         val preferences = context.secretsDataStore.data.first()
         val encrypted = preferences[encryptedKey] ?: return ""
         val iv = preferences[initializationVector] ?: return ""
-        return runCatching {
+
+        return try {
+            val decodedIv = Base64.getDecoder().decode(iv)
+            val decodedEncrypted = Base64.getDecoder().decode(encrypted)
+
             val cipher = Cipher.getInstance(TRANSFORMATION).apply {
                 init(
                     Cipher.DECRYPT_MODE,
                     getOrCreateSecretKey(),
-                    GCMParameterSpec(128, Base64.getDecoder().decode(iv)),
+                    GCMParameterSpec(128, decodedIv),
                 )
             }
-            cipher.doFinal(Base64.getDecoder().decode(encrypted)).toString(Charsets.UTF_8)
-        }.getOrElse {
-            context.secretsDataStore.edit { preferences ->
-                preferences.remove(encryptedKey)
-                preferences.remove(initializationVector)
-                preferences[recoveryRequired] = true
+            cipher.doFinal(decodedEncrypted).toString(Charsets.UTF_8)
+        } catch (_: Exception) {
+            context.secretsDataStore.edit { prefs ->
+                prefs.remove(encryptedKey)
+                prefs.remove(initializationVector)
+                prefs[recoveryRequired] = true
             }
             ""
         }

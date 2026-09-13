@@ -20,6 +20,15 @@ class ChatViewModelTest {
         assertEquals(PromptError.EMPTY, viewModel.uiState.value.promptError)
     }
 
+    @Test fun voiceResultBecomesEditableDraftAndCancellationIsExplained() = runTest(mainDispatcherRule.testDispatcher) {
+        val viewModel = createViewModel(GeminiResult.Success("unused"))
+        viewModel.onVoiceResult("spoken draft")
+        assertEquals("spoken draft", viewModel.uiState.value.prompt)
+
+        viewModel.onVoiceCancelled()
+        assertEquals("Voice typing was cancelled. Nothing was sent.", viewModel.uiState.value.errorMessage)
+    }
+
     @Test fun successfulRequestPersistsBothMessagesAndSendsPromptOnce() = runTest(mainDispatcherRule.testDispatcher) {
         val history = FakeHistoryRepository()
         var captured: ChatRequest? = null
@@ -63,6 +72,31 @@ class ChatViewModelTest {
         assertEquals("Recovered", history.messages.value.last().text)
     }
 
+    @Test fun regenerateKeepsAlternativesAndSelectsTheNewAnswer() = runTest(mainDispatcherRule.testDispatcher) {
+        val history = FakeHistoryRepository()
+        var calls = 0
+        val viewModel = ChatViewModel(
+            repository = object : GeminiRepository {
+                override suspend fun generate(request: ChatRequest) =
+                    GeminiResult.Success(if (calls++ == 0) "First answer" else "Alternative answer")
+            },
+            historyRepository = history,
+            ioDispatcher = mainDispatcherRule.testDispatcher,
+        )
+        viewModel.onPromptChange("Explain this")
+        viewModel.onSend()
+        advanceUntilIdle()
+
+        val originalId = viewModel.uiState.value.messages.first { it.role == MessageRole.MODEL }.id
+        viewModel.regenerate(originalId)
+        advanceUntilIdle()
+
+        val visible = viewModel.uiState.value.messages.first { it.role == MessageRole.MODEL }
+        assertEquals("Alternative answer", visible.text)
+        assertEquals(2, visible.variantCount)
+        assertEquals(2, visible.variantIndex)
+    }
+
     private fun createViewModel(result: GeminiResult, history: FakeHistoryRepository = FakeHistoryRepository()) =
         ChatViewModel(
             repository = object : GeminiRepository { override suspend fun generate(request: ChatRequest) = result },
@@ -80,9 +114,18 @@ private class FakeHistoryRepository : ChatHistoryRepository {
         messages.value += ChatMessageEntity(id, text, true, id, requestStatus = RequestStatus.PENDING.name)
         return id
     }
-    override suspend fun complete(userMessageId: Long, response: String) {
+    override suspend fun complete(userMessageId: Long, response: String, metadata: ResponseMetadata) {
         messages.value = messages.value.map { if (it.id == userMessageId) it.copy(requestStatus = RequestStatus.COMPLETE.name) else it }
-        messages.value += ChatMessageEntity(nextId++, response, false, nextId, role = MessageRole.MODEL.name, replyToId = userMessageId)
+        messages.value += ChatMessageEntity(
+            id = nextId++, text = response, isFromUser = false, createdAt = nextId,
+            role = MessageRole.MODEL.name, replyToId = userMessageId,
+            contextMessageCount = metadata.contextMessageCount,
+            protectedUsedCount = metadata.protectedUsedCount,
+            excludedAtRequestCount = metadata.excludedAtRequestCount,
+            trimmedAtRequestCount = metadata.trimmedAtRequestCount,
+            customInstructionsUsed = metadata.customInstructionsUsed,
+            wasVoicePrompt = metadata.wasVoicePrompt,
+        )
     }
     override suspend fun markPending(userMessageId: Long) {
         messages.value = messages.value.map { if (it.id == userMessageId) it.copy(requestStatus = RequestStatus.PENDING.name) else it }
@@ -92,6 +135,29 @@ private class FakeHistoryRepository : ChatHistoryRepository {
     }
     override suspend fun addSummary(text: String) { messages.value += ChatMessageEntity(nextId++, text, false, role = MessageRole.SUMMARY.name) }
     override suspend fun deleteSummaries() { messages.value = messages.value.filter { it.role != MessageRole.SUMMARY.name } }
+    override suspend fun deleteMessage(id: Long) {
+        messages.value = messages.value.filterNot { it.id == id || it.replyToId == id }
+    }
+    override suspend fun addVariant(originalId: Long, response: String, metadata: ResponseMetadata) {
+        val original = messages.value.first { it.id == originalId }
+        val groupId = original.variantGroupId ?: original.id
+        messages.value = messages.value.map {
+            if (it.id == originalId) it.copy(variantGroupId = groupId, isSelectedVariant = false) else it
+        } + original.copy(
+            id = nextId++, text = response, createdAt = nextId, variantGroupId = groupId, isSelectedVariant = true,
+            contextMessageCount = metadata.contextMessageCount,
+            protectedUsedCount = metadata.protectedUsedCount,
+            excludedAtRequestCount = metadata.excludedAtRequestCount,
+            trimmedAtRequestCount = metadata.trimmedAtRequestCount,
+            customInstructionsUsed = metadata.customInstructionsUsed,
+            wasVoicePrompt = metadata.wasVoicePrompt,
+        )
+    }
+    override suspend fun selectVariant(messageId: Long, groupId: Long) {
+        messages.value = messages.value.map {
+            if (it.variantGroupId == groupId) it.copy(isSelectedVariant = it.id == messageId) else it
+        }
+    }
     override suspend fun setContextStatus(id: Long, status: ContextStatus) {
         messages.value = messages.value.map { if (it.id == id) it.copy(contextStatus = status.name) else it }
     }

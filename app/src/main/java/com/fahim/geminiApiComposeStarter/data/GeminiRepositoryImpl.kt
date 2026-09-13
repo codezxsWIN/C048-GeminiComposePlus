@@ -8,7 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 
-private const val DEFAULT_MODEL = "gemini-2.0-flash"
+private const val DEFAULT_MODEL = "gemini-3.6-flash"
 
 class GeminiRepositoryImpl(
     private val apiKeyStore: ApiKeyStore,
@@ -29,7 +29,8 @@ class GeminiRepositoryImpl(
             val history = request.orderedHistory.map { message ->
                 content(role = if (message.role == ChatRole.USER) "user" else "model") { text(message.text) }
             }
-            val response = model.startChat(history).sendMessage(request.currentMessage)
+            val chat = model.startChat(history)
+            val response = chat.sendMessage(request.currentMessage)
             val text = response.text?.trim()
             if (text.isNullOrEmpty()) GeminiResult.Failure(GeminiFailure.Blocked)
             else GeminiResult.Success(text)
@@ -45,8 +46,9 @@ class GeminiRepositoryImpl(
     private fun classify(error: Exception): GeminiFailure {
         val message = error.message.orEmpty().lowercase()
         return when {
-            "401" in message || "403" in message || "api key" in message -> GeminiFailure.Authentication
+            "401" in message || "403" in message || "api key" in message || "unauthenticated" in message -> GeminiFailure.Authentication
             "429" in message || "quota" in message || "rate limit" in message -> GeminiFailure.Quota
+            "404" in message || "not found" in message || "model" in message && "invalid" in message -> GeminiFailure.ModelUnavailable
             "token" in message && ("limit" in message || "large" in message) -> GeminiFailure.ContextTooLarge
             "blocked" in message || "safety" in message -> GeminiFailure.Blocked
             "timeout" in message -> GeminiFailure.Timeout

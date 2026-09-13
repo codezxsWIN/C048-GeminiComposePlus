@@ -3,6 +3,7 @@ package com.fahim.geminiApiComposeStarter.ui.chat
 import com.fahim.geminiApiComposeStarter.data.local.ContextStatus
 import com.fahim.geminiApiComposeStarter.data.local.MessageRole
 import com.fahim.geminiApiComposeStarter.data.local.RequestStatus
+import com.fahim.geminiApiComposeStarter.data.local.ChatSecurityLevel
 
 data class ChatUiState(
     val prompt: String = "",
@@ -19,9 +20,23 @@ data class ChatUiState(
     val protectedCount: Int = 0,
     val excludedCount: Int = 0,
     val trimmedCount: Int = 0,
+    val crossChatMemoryCount: Int = 0,
     val apiKeyConfigured: Boolean = false,
     val apiKeyNeedsRecovery: Boolean = false,
+    val chats: List<ChatTab> = emptyList(),
+    val activeChatId: Long = 1,
+    val securityLevel: ChatSecurityLevel = ChatSecurityLevel.PRIVATE,
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
 )
+
+data class ChatTab(
+    val id: Long,
+    val title: String,
+    val securityLevel: ChatSecurityLevel,
+    val updatedAt: Long = 0,
+)
+
+enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
 enum class PromptError { EMPTY, PROTECTED_CONTEXT_TOO_LARGE }
 
@@ -42,6 +57,17 @@ data class ChatMessage(
     val contextStatus: ContextStatus,
     val requestStatus: RequestStatus,
     val createdAt: Long,
+    val replyToId: Long? = null,
+    val variantGroupId: Long? = null,
+    val variantIndex: Int = 1,
+    val variantCount: Int = 1,
+    val variantIds: List<Long> = emptyList(),
+    val contextMessageCount: Int = 0,
+    val protectedUsedCount: Int = 0,
+    val excludedAtRequestCount: Int = 0,
+    val trimmedAtRequestCount: Int = 0,
+    val customInstructionsUsed: Boolean = false,
+    val wasVoicePrompt: Boolean = false,
 ) {
     val isFromUser get() = role == MessageRole.USER
     val isSummary get() = role == MessageRole.SUMMARY

@@ -12,16 +12,19 @@ private val Context.appDataStore by preferencesDataStore(name = "app_preferences
 data class AppPreferencesState(
     val draft: String = "",
     val customInstructions: String = "",
+    val themeMode: String = "SYSTEM",
 )
 
 class AppPreferences(private val context: Context) {
     private val draftKey = stringPreferencesKey("draft")
     private val instructionsKey = stringPreferencesKey("custom_instructions")
+    private val themeModeKey = stringPreferencesKey("theme_mode")
 
     val state: Flow<AppPreferencesState> = context.appDataStore.data.map {
         AppPreferencesState(
             draft = it[draftKey].orEmpty(),
             customInstructions = it[instructionsKey].orEmpty(),
+            themeMode = it[themeModeKey] ?: "SYSTEM",
         )
     }
 
@@ -31,6 +34,10 @@ class AppPreferences(private val context: Context) {
 
     suspend fun setCustomInstructions(value: String) {
         context.appDataStore.edit { it[instructionsKey] = value }
+    }
+
+    suspend fun setThemeMode(value: String) {
+        context.appDataStore.edit { it[themeModeKey] = value }
     }
 
     suspend fun clearUserPreferences() {
