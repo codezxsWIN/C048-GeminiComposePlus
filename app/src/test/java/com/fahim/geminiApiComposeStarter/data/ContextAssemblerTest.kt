@@ -5,6 +5,49 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ContextAssemblerTest {
+    @Test fun hidingPromptAlsoExcludesItsReplyEvenWithEarlierAllowedTurns() {
+        val input = listOf(message(1, "public"), message(2, "secret", ContextStatus.EXCLUDED),
+            message(3, "echo of secret", role = MessageRole.MODEL).copy(replyToId = 2))
+        val result = ContextAssembler.assemble(input, null, "next", "")
+        assertEquals(setOf(1L), result.selectedMessageIds)
+        assertFalse(result.history.any { "secret" in it.text })
+        assertEquals(listOf(1L), ContextAssembler.eligibleMessages(input).map { it.id })
+    }
+
+    @Test fun unselectedVariantsAndUnknownPrivacyValuesFailClosed() {
+        val result = ContextAssembler.eligibleMessages(listOf(
+            message(1, "allowed"),
+            message(2, "old answer", role = MessageRole.MODEL).copy(isSelectedVariant = false),
+            message(3, "invalid").copy(contextStatus = "UNKNOWN"),
+        ))
+        assertEquals(listOf(1L), result.map { it.id })
+    }
+
+    @Test fun trimmingParentAlsoDropsItsReply() {
+        val result = ContextAssembler.assemble(listOf(message(1, "start"), message(2, "x".repeat(80000)),
+            message(3, "dependent answer", role = MessageRole.MODEL).copy(replyToId = 2)), null, "next", "")
+        assertEquals(setOf(1L), result.selectedMessageIds)
+    }
+
+    @Test fun oversizedPromptBlocksEvenWithoutHistory() {
+        assertTrue(ContextAssembler.assemble(emptyList(), null, "x".repeat(72001), "").protectedOverflow)
+    }
+
+    @Test fun normalizedHistoryRetainsAllSourceIdsForAudit() {
+        val result = ContextAssembler.assemble(listOf(message(1, "one"), message(2, "two")), null, "next", "")
+        assertEquals(1, result.history.size)
+        assertEquals(setOf(1L, 2L), result.selectedMessageIds)
+    }
+
+    @Test fun pinningAnswerReservesItsParentBeforeNewerOrdinaryMessages() {
+        val result = ContextAssembler.assemble(listOf(
+            message(1, "Parent question"),
+            message(2, "Pinned answer", ContextStatus.PROTECTED, MessageRole.MODEL).copy(replyToId = 1),
+            message(3, "x".repeat(71970)),
+        ), null, "next", "")
+        assertFalse(result.protectedOverflow)
+        assertEquals(setOf(1L, 2L), result.selectedMessageIds)
+    }
     @Test fun excludesFirewallSummaryFailedAndCurrentMessages() {
         val messages = listOf(
             message(1, "allowed"),

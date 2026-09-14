@@ -31,6 +31,29 @@ class ChatViewModel(
     private var failedPrompt: String? = null
     private var nextPromptFromVoice = false
     private var searchJob: Job? = null
+    private var previewJob: Job? = null
+    private var policyJob: Job? = null
+    private var preferencesJob: Job? = null
+    private var switchingChat = false
+    private val busy get() = switchingChat || _uiState.value.isLoading || _uiState.value.isSummarizing
+
+    private fun saveDraft(value: String) {
+        val chatId = _uiState.value.activeChatId
+        val previous = preferencesJob
+        preferencesJob = viewModelScope.launch {
+            previous?.join()
+            preferences?.setDraft(value, chatId)
+        }
+    }
+
+    private suspend fun loadChatPreferences(id: Long) {
+        preferencesJob?.join()
+        val saved = preferences?.stateForChat(id)?.first()
+        if (_uiState.value.activeChatId == id) {
+            _uiState.update { it.copy(prompt = saved?.draft.orEmpty(), customInstructions = saved?.customInstructions.orEmpty()) }
+            updateMessagesAndContext()
+        }
+    }
 
     init {
         viewModelScope.launch {
@@ -38,8 +61,6 @@ class ChatViewModel(
             if (saved != null) {
                 _uiState.update {
                     it.copy(
-                        prompt = saved.draft,
-                        customInstructions = saved.customInstructions,
                         themeMode = runCatching { ThemeMode.valueOf(saved.themeMode) }.getOrDefault(ThemeMode.SYSTEM),
                     )
                 }
@@ -55,6 +76,7 @@ class ChatViewModel(
                 val defaultId = repository.ensureDefault()
                 historyRepository.selectChat(defaultId)
                 _uiState.update { it.copy(activeChatId = defaultId) }
+                loadChatPreferences(defaultId)
                 repository.sessions.collect { sessions ->
                     val tabs = sessions.map { session ->
                         ChatTab(
@@ -73,6 +95,7 @@ class ChatViewModel(
                             securityLevel = active?.securityLevel ?: ChatSecurityLevel.PRIVATE,
                         )
                     }
+                    updateMessagesAndContext()
                 }
             }
         }
@@ -88,7 +111,7 @@ class ChatViewModel(
     fun onPromptChange(value: String) {
         nextPromptFromVoice = false
         _uiState.update { it.copy(prompt = value, promptError = null) }
-        preferences?.let { viewModelScope.launch(ioDispatcher) { it.setDraft(value) } }
+        saveDraft(value)
         updateMessagesAndContext()
     }
 
@@ -96,12 +119,12 @@ class ChatViewModel(
         val message = entities.firstOrNull { it.id == messageId && it.role == MessageRole.USER.name } ?: return
         nextPromptFromVoice = false
         _uiState.update { it.copy(prompt = message.text, editingMessageId = messageId, promptError = null) }
-        preferences?.let { viewModelScope.launch(ioDispatcher) { it.setDraft(message.text) } }
+        saveDraft(message.text)
     }
 
     fun cancelEdit() {
         _uiState.update { it.copy(prompt = "", editingMessageId = null, promptError = null) }
-        preferences?.let { viewModelScope.launch(ioDispatcher) { it.setDraft("") } }
+        saveDraft("")
     }
 
     fun onChatSearchChange(query: String) {
@@ -132,7 +155,7 @@ class ChatViewModel(
     fun onVoiceResult(value: String) {
         nextPromptFromVoice = true
         _uiState.update { it.copy(prompt = value, promptError = null) }
-        preferences?.let { viewModelScope.launch(ioDispatcher) { it.setDraft(value) } }
+        saveDraft(value)
         updateMessagesAndContext()
     }
     fun onVoiceUnavailable() = showError("Voice recognition is not available on this device.")
@@ -147,7 +170,12 @@ class ChatViewModel(
         preferences?.let { viewModelScope.launch(ioDispatcher) { it.setThemeMode(mode.name) } }
     }
     fun selectChat(id: Long) {
-        if (_uiState.value.isLoading || (id == _uiState.value.activeChatId)) return
+        if (busy || (id == _uiState.value.activeChatId)) return
+        if (policyJob?.isActive == true) { showError("Saving context settings. Try switching chats again in a moment."); return }
+        switchingChat = true
+        failedRequestId = null
+        failedPrompt = null
+        entities = emptyList()
         historyRepository.selectChat(id)
         val selected = _uiState.value.chats.firstOrNull { it.id == id }
         _uiState.update {
@@ -155,18 +183,33 @@ class ChatViewModel(
                 activeChatId = id,
                 securityLevel = selected?.securityLevel ?: ChatSecurityLevel.PRIVATE,
                 prompt = "",
+                customInstructions = "",
                 errorMessage = null,
                 promptError = null,
                 editingMessageId = null,
+                messages = emptyList(),
+                canRetry = false,
             )
+        }
+        updateMessagesAndContext()
+        viewModelScope.launch {
+            try { loadChatPreferences(id) } finally { switchingChat = false }
         }
     }
     fun newChat() {
+        if (busy) return
+        if (sessionRepository == null) return
+        switchingChat = true
         sessionRepository?.let { repository ->
-            viewModelScope.launch(ioDispatcher) {
+            viewModelScope.launch {
+                policyJob?.join()
                 val id = repository.create()
                 historyRepository.selectChat(id)
-                _uiState.update { it.copy(activeChatId = id, prompt = "", editingMessageId = null, errorMessage = null, promptError = null) }
+                entities = emptyList()
+                failedRequestId = null
+                failedPrompt = null
+                _uiState.update { it.copy(activeChatId = id, securityLevel = ChatSecurityLevel.PRIVATE, messages = emptyList(), prompt = "", customInstructions = "", editingMessageId = null, errorMessage = null, promptError = null, canRetry = false) }
+                try { loadChatPreferences(id) } finally { switchingChat = false }
             }
         }
     }
@@ -174,60 +217,111 @@ class ChatViewModel(
         sessionRepository?.let { repository -> viewModelScope.launch(ioDispatcher) { repository.rename(_uiState.value.activeChatId, title) } }
     }
     fun setSecurityLevel(level: ChatSecurityLevel) {
+        if (busy) { showError("Wait for the current response before changing privacy."); return }
+        val chatId = _uiState.value.activeChatId
+        val previous = policyJob
         _uiState.update { it.copy(securityLevel = level) }
         sessionRepository?.let { repository ->
-            viewModelScope.launch(ioDispatcher) {
-                repository.setSecurityLevel(_uiState.value.activeChatId, level)
-                refreshCrossChatMemoryCount()
+            policyJob = viewModelScope.launch {
+                previous?.join()
+                withContext(ioDispatcher) { repository.setSecurityLevel(chatId, level) }
+                updateMessagesAndContext()
             }
         }
     }
     fun deleteActiveChat() {
+        if (busy) { showError("Wait for the current response before deleting this chat."); return }
         sessionRepository?.let { repository ->
-            viewModelScope.launch(ioDispatcher) {
+            switchingChat = true
+            viewModelScope.launch {
+                try {
+                policyJob?.join()
+                preferencesJob?.join()
                 val current = _uiState.value.chats
-                if (current.size <= 1) { clearHistory(); return@launch }
-                repository.delete(_uiState.value.activeChatId)
-                val next = current.first { it.id != _uiState.value.activeChatId }
+                if (current.size <= 1) {
+                    historyRepository.clear()
+                    preferences?.clearUserPreferences(_uiState.value.activeChatId)
+                    loadChatPreferences(_uiState.value.activeChatId)
+                    return@launch
+                }
+                val deletedId = _uiState.value.activeChatId
+                repository.delete(deletedId)
+                preferences?.clearUserPreferences(deletedId)
+                val next = current.first { it.id != deletedId }
                 historyRepository.selectChat(next.id)
                 _uiState.update { it.copy(activeChatId = next.id, securityLevel = next.securityLevel, prompt = "") }
+                loadChatPreferences(next.id)
+                } finally {
+                    failedRequestId = null
+                    failedPrompt = null
+                    _uiState.update { it.copy(canRetry = false, editingMessageId = null) }
+                    switchingChat = false
+                }
             }
         }
     }
 
     fun setCustomInstructions(value: String) {
+        if (busy) return
         _uiState.update { it.copy(customInstructions = value) }
-        preferences?.let { viewModelScope.launch(ioDispatcher) { it.setCustomInstructions(value) } }
+        val chatId = _uiState.value.activeChatId
+        val previous = preferencesJob
+        preferencesJob = viewModelScope.launch {
+            previous?.join()
+            preferences?.setCustomInstructions(value, chatId)
+        }
+        updateMessagesAndContext()
     }
 
     fun resetCustomInstructions() {
         setCustomInstructions("")
     }
     fun setContextStatus(id: Long, status: ContextStatus) {
-        viewModelScope.launch(ioDispatcher) { historyRepository.setContextStatus(id, status) }
-    }
-    fun clearHistory() { viewModelScope.launch(ioDispatcher) { historyRepository.clear() } }
-    fun clearDraftAndInstructions() {
-        _uiState.update { it.copy(prompt = "", customInstructions = "") }
-        viewModelScope.launch(ioDispatcher) { preferences?.clearUserPreferences() }
-    }
-    fun clearEncryptedApiKey() { viewModelScope.launch(ioDispatcher) { apiKeyStore?.clear() } }
-    fun deleteSummary() { viewModelScope.launch(ioDispatcher) { historyRepository.deleteSummaries() } }
-    fun deleteMessage(id: Long) { viewModelScope.launch(ioDispatcher) { historyRepository.deleteMessage(id) } }
-    fun selectVariant(messageId: Long, groupId: Long) {
-        viewModelScope.launch(ioDispatcher) { historyRepository.selectVariant(messageId, groupId) }
+        changeHistory { historyRepository.setContextStatus(id, status) }
     }
 
+    private fun changeHistory(action: suspend () -> Unit) {
+        if (busy) { showError("Wait for the current response before changing context."); return }
+        val previous = policyJob
+        policyJob = viewModelScope.launch {
+            previous?.join()
+            withContext(ioDispatcher) { action() }
+        }
+    }
+    fun clearHistory() = changeHistory { historyRepository.clear() }
+    fun clearDraftAndInstructions() {
+        if (busy) return
+        val chatId = _uiState.value.activeChatId
+        _uiState.update { it.copy(prompt = "", customInstructions = "") }
+        val previous = preferencesJob
+        preferencesJob = viewModelScope.launch {
+            previous?.join()
+            preferences?.clearUserPreferences(chatId)
+        }
+        updateMessagesAndContext()
+    }
+    fun clearEncryptedApiKey() { viewModelScope.launch(ioDispatcher) { apiKeyStore?.clear() } }
+    fun deleteSummary() = changeHistory { historyRepository.deleteSummaries() }
+    fun deleteMessage(id: Long) = changeHistory { historyRepository.deleteMessage(id) }
+    fun selectVariant(messageId: Long, groupId: Long) = changeHistory { historyRepository.selectVariant(messageId, groupId) }
+
     fun regenerate(messageId: Long) {
-        if (_uiState.value.isLoading) return
+        if (busy) return
+        _uiState.update { it.copy(isLoading = true, errorMessage = null) }
         viewModelScope.launch {
+            try {
+            policyJob?.join()
             val snapshot = withContext(ioDispatcher) { historyRepository.snapshot() }
             val original = snapshot.firstOrNull { (it.id == messageId) && (it.role == MessageRole.MODEL.name) }
                 ?: return@launch
             val userId = original.replyToId ?: return@launch
             val user = snapshot.firstOrNull { it.id == userId } ?: return@launch
+            if (user.contextStatus == ContextStatus.EXCLUDED.name) {
+                showError("Include the original prompt before regenerating its answer.")
+                return@launch
+            }
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val historyWithoutTurn = snapshot.filterNot { (it.id == userId) || (it.replyToId == userId) }
+            val historyWithoutTurn = snapshot.takeWhile { it.id != userId }
             val sharedMemory = crossChatMemory()
             val context = ContextAssembler.assemble(
                 messages = sharedMemory + historyWithoutTurn,
@@ -235,6 +329,11 @@ class ChatViewModel(
                 currentText = user.text,
                 customInstructions = _uiState.value.customInstructions,
             )
+            if (context.protectedOverflow) {
+                _uiState.update { it.copy(isLoading = false) }
+                showError("This request exceeds the context budget. Shorten the prompt or unpin some messages.")
+                return@launch
+            }
             val request = ChatRequest(user.text, context.history, _uiState.value.customInstructions, user.id)
             when (val result = repository.generate(request)) {
                 is GeminiResult.Success -> withContext(ioDispatcher) {
@@ -242,14 +341,25 @@ class ChatViewModel(
                 }
                 is GeminiResult.Failure -> showError(result.reason.userMessage)
             }
-            _uiState.update { it.copy(isLoading = false) }
+            } finally { _uiState.update { it.copy(isLoading = false) } }
         }
     }
 
     fun retry() {
         val id = failedRequestId ?: return
         val prompt = failedPrompt ?: return
-        if (!_uiState.value.isLoading) viewModelScope.launch { executeRequest(id, prompt, isRetry = true) }
+        if (busy) return
+        _uiState.update { it.copy(isLoading = true) }
+        viewModelScope.launch {
+            try {
+            policyJob?.join()
+            if (withContext(ioDispatcher) { historyRepository.snapshot() }.none { it.id == id && it.contextStatus != ContextStatus.EXCLUDED.name }) {
+                showError("This failed message was removed or hidden. Send a new prompt instead.")
+                return@launch
+            }
+            executeRequest(id, prompt, isRetry = true)
+            } finally { _uiState.update { it.copy(isLoading = false) } }
+        }
     }
 
     fun onSend() {
@@ -258,7 +368,7 @@ class ChatViewModel(
             _uiState.update { it.copy(promptError = PromptError.EMPTY) }
             return
         }
-        if (_uiState.value.isLoading) return
+        if (busy) return
         when (raw.lowercase()) {
             "/summarize" -> { onPromptChange(""); summarizeChat(); return }
             "/reset-instructions" -> {
@@ -278,7 +388,7 @@ class ChatViewModel(
         } else raw
         val editedMessageId = _uiState.value.editingMessageId
         _uiState.update { it.copy(prompt = "", editingMessageId = null, isLoading = true, errorMessage = null, promptError = null, canRetry = false) }
-        preferences?.let { viewModelScope.launch(ioDispatcher) { it.setDraft("") } }
+        saveDraft("")
         val voicePrompt = nextPromptFromVoice
         nextPromptFromVoice = false
         viewModelScope.launch {
@@ -291,15 +401,14 @@ class ChatViewModel(
     }
 
     fun summarizeChat() {
-        if (_uiState.value.isLoading || _uiState.value.isSummarizing) return
+        if (busy) return
+        _uiState.update { it.copy(isSummarizing = true, errorMessage = null) }
         viewModelScope.launch {
+            policyJob?.join()
             val snapshot = withContext(ioDispatcher) { historyRepository.snapshot() }
-            val allowed = snapshot.filter {
-                (it.contextStatus != ContextStatus.EXCLUDED.name) &&
-                    (it.requestStatus == RequestStatus.COMPLETE.name) &&
-                    (it.role != MessageRole.SUMMARY.name)
-            }
+            val allowed = ContextAssembler.eligibleMessages(snapshot)
             if (allowed.isEmpty()) {
+                _uiState.update { it.copy(isSummarizing = false) }
                 showError("There is no included chat content to summarize.")
                 return@launch
             }
@@ -312,6 +421,11 @@ class ChatViewModel(
                 orderedHistory = emptyList(),
                 requestId = -1,
             )
+            if (ContextAssembler.assemble(emptyList(), null, request.currentMessage, "").protectedOverflow) {
+                _uiState.update { it.copy(isSummarizing = false) }
+                showError("The allowed chat is too large to summarize at once. Hide some older messages first.")
+                return@launch
+            }
             when (val result = repository.generate(request)) {
                 is GeminiResult.Success -> withContext(ioDispatcher) { historyRepository.addSummary(result.text) }
                 is GeminiResult.Failure -> showError(result.reason.userMessage)
@@ -321,6 +435,7 @@ class ChatViewModel(
     }
 
     private suspend fun executeRequest(id: Long, prompt: String, isRetry: Boolean = false, wasVoicePrompt: Boolean = false) {
+        policyJob?.join()
         if (isRetry) withContext(ioDispatcher) { historyRepository.markPending(id) }
         _uiState.update { it.copy(isLoading = true, errorMessage = null, canRetry = false) }
         val snapshot = withContext(ioDispatcher) { historyRepository.snapshot() }
@@ -392,25 +507,36 @@ class ChatViewModel(
                 trimmedCount = context.trimmedCount,
             )
         }
-        viewModelScope.launch(ioDispatcher) { refreshCrossChatMemoryCount() }
+        previewJob?.cancel()
+        previewJob = viewModelScope.launch {
+            policyJob?.join()
+            val chatId = _uiState.value.activeChatId
+            val memory = crossChatMemory()
+            val state = _uiState.value
+            val preview = ContextAssembler.assemble(memory + entities, null, state.prompt, state.customInstructions)
+            if (state.activeChatId == chatId) _uiState.update {
+                it.copy(
+                    estimatedTokens = preview.estimatedTokens,
+                    trimmedCount = preview.trimmedCount,
+                    protectedCount = preview.protectedCount,
+                    nextContextIds = preview.selectedMessageIds,
+                    crossChatMemoryCount = memory.count { item -> item.id in preview.selectedMessageIds },
+                    memoryPreview = memory.filter { item -> item.id in preview.selectedMessageIds }.map { item -> item.text },
+                    contextBlocked = preview.protectedOverflow,
+                )
+            }
+        }
     }
 
     private suspend fun crossChatMemory(): List<ChatMessageEntity> = withContext(ioDispatcher) {
         sessionRepository?.crossChatMemory(_uiState.value.activeChatId, _uiState.value.securityLevel).orEmpty()
     }
 
-    private suspend fun refreshCrossChatMemoryCount() {
-        val count = sessionRepository
-            ?.crossChatMemory(_uiState.value.activeChatId, _uiState.value.securityLevel)
-            ?.size ?: 0
-        _uiState.update { it.copy(crossChatMemoryCount = count) }
-    }
-
     private fun showError(message: String) = _uiState.update { it.copy(errorMessage = message) }
 
     private fun ContextSnapshot.toMetadata(voice: Boolean) =
         ResponseMetadata(
-            contextMessageCount = history.size,
+            contextMessageCount = selectedMessageIds.size,
             protectedUsedCount = protectedCount,
             excludedAtRequestCount = excludedCount,
             trimmedAtRequestCount = trimmedCount,

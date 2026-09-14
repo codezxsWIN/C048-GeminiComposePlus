@@ -13,11 +13,26 @@ data class ContextSnapshot(
     val excludedCount: Int,
     val trimmedCount: Int,
     val protectedOverflow: Boolean,
+    val selectedMessageIds: Set<Long> = emptySet(),
 )
 
 object ContextAssembler {
     const val APP_TOKEN_BUDGET = 24_000
     private const val CHARS_PER_TOKEN = 3.0
+
+    /** Apply the same privacy gate to chat requests, summaries and previews. */
+    fun eligibleMessages(messages: List<ChatMessageEntity>, currentMessageId: Long? = null): List<ChatMessageEntity> {
+        val allowed = messages.filter {
+            it.id != currentMessageId && it.requestStatus == RequestStatus.COMPLETE.name &&
+                it.role in setOf(MessageRole.USER.name, MessageRole.MODEL.name) &&
+                it.isSelectedVariant &&
+                it.contextStatus in setOf(ContextStatus.INCLUDED.name, ContextStatus.PROTECTED.name)
+        }
+        val userIds = allowed.filter { it.role == MessageRole.USER.name }.mapTo(mutableSetOf()) { it.id }
+        return allowed.filter {
+            it.role != MessageRole.MODEL.name || it.replyToId == null || it.replyToId in userIds
+        }.sortedWith(compareBy(ChatMessageEntity::createdAt, ChatMessageEntity::id))
+    }
 
     fun assemble(
         messages: List<ChatMessageEntity>,
@@ -26,25 +41,22 @@ object ContextAssembler {
         customInstructions: String,
     ): ContextSnapshot {
         val ordered = messages.sortedWith(compareBy(ChatMessageEntity::createdAt, ChatMessageEntity::id))
-        val eligible = ordered.filter {
-            it.id != currentMessageId &&
-                it.requestStatus == RequestStatus.COMPLETE.name &&
-                it.role != MessageRole.SUMMARY.name &&
-                it.isSelectedVariant &&
-                it.contextStatus != ContextStatus.EXCLUDED.name
-        }
+        val eligible = eligibleMessages(ordered, currentMessageId)
         val excludedCount = ordered.count {
             it.role != MessageRole.SUMMARY.name && it.contextStatus == ContextStatus.EXCLUDED.name
         }
         val protected = eligible.filter { it.contextStatus == ContextStatus.PROTECTED.name }
+        val parentIds = protected.mapNotNull { it.replyToId }.toSet()
+        val required = eligible.filter { it.contextStatus == ContextStatus.PROTECTED.name || it.id in parentIds }
         val baseChars = currentText.length + customInstructions.length
-        val protectedChars = protected.sumOf { it.text.length + 16 }
+        val protectedChars = required.sumOf { it.text.length + 16 }
         val maxChars = (APP_TOKEN_BUDGET * CHARS_PER_TOKEN).toInt()
         if (baseChars + protectedChars > maxChars) {
             return ContextSnapshot(emptyList(), estimate(baseChars + protectedChars), protected.size, excludedCount, 0, true)
         }
         var remaining = maxChars - baseChars - protectedChars
-        val ordinary = eligible.filterNot { it.contextStatus == ContextStatus.PROTECTED.name }
+        val requiredIds = required.map { it.id }.toSet()
+        val ordinary = eligible.filterNot { it.id in requiredIds }
         val selectedOrdinary = mutableListOf<ChatMessageEntity>()
         for (message in ordinary.asReversed()) {
             val cost = message.text.length + 16
@@ -53,8 +65,17 @@ object ContextAssembler {
                 remaining -= cost
             }
         }
-        val selectedIds = (protected + selectedOrdinary).mapTo(mutableSetOf()) { it.id }
-        val selectedContext = eligible.filter { it.id in selectedIds }.mapNotNull {
+        val selectedIds = (required + selectedOrdinary).mapTo(mutableSetOf()) { it.id }
+        // A reply must not survive after its parent was removed by the budget.
+        val selectedUsers = eligible.filter { it.id in selectedIds && it.role == MessageRole.USER.name }.map { it.id }.toSet()
+        val selectedEntities = eligible.filter {
+            it.id in selectedIds && (it.role != MessageRole.MODEL.name || it.replyToId == null || it.replyToId in selectedUsers)
+        }.dropWhile { it.role == MessageRole.MODEL.name }
+        val actualIds = selectedEntities.mapTo(mutableSetOf()) { it.id }
+        if (protected.any { it.id !in actualIds }) {
+            return ContextSnapshot(emptyList(), estimate(baseChars + protectedChars), protected.size, excludedCount, 0, true)
+        }
+        val selectedContext = selectedEntities.mapNotNull {
             val role = when (it.role) {
                 MessageRole.USER.name -> ChatRole.USER
                 MessageRole.MODEL.name -> ChatRole.MODEL
@@ -69,8 +90,9 @@ object ContextAssembler {
             estimatedTokens = estimate(serializedChars),
             protectedCount = protected.size,
             excludedCount = excludedCount,
-            trimmedCount = eligible.size - selectedIds.size + invalidLeadingCount,
+            trimmedCount = eligible.size - actualIds.size + invalidLeadingCount,
             protectedOverflow = false,
+            selectedMessageIds = actualIds,
         )
     }
 

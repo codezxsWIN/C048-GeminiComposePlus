@@ -15,19 +15,19 @@ Material 3 chat with responsive layout, loading states, retries, and multi-turn 
 
 ### Context controls
 
-Check the approximate request size before sending. Each message can be used normally, hidden from Gemini, or protected so it is prioritised when context is trimmed.
+Preview the messages and shared memories selected for the next request, with an estimated token budget. Hide excludes a message and its linked reply from future context; Pin preserves allowed details during trimming.
 
 <img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/03-context-controls.png" alt="Context controls" width="38%" />
 
 ### Conversation summary
 
-`/summarize` creates a local summary using only allowed messages. Hidden messages are never included in the summary request.
+`/summarize` sends only allowed messages and selected answer versions to Gemini. The resulting summary is saved locally and excluded from later context.
 
 <img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/12-summary.png" alt="Conversation summary" width="38%" />
 
 ### Privacy settings
 
-Choose Connected, Protected memory, or Confidential mode for each chat. The selected mode controls whether details may be reused across conversations.
+Choose Connected, Protected memory, or Confidential mode for each chat. Confidential blocks memory sharing in both directions; prompts still go to Gemini. Drafts and custom instructions stay separate for each chat. [Privacy rules and demonstration](docs/privacy-and-context.md).
 
 <img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/04-privacy-security.png" alt="Privacy and security settings" width="38%" />
 

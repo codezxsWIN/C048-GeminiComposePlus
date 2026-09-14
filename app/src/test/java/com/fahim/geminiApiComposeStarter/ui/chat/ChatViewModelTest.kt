@@ -14,6 +14,45 @@ import org.junit.Test
 class ChatViewModelTest {
     @get:Rule val mainDispatcherRule = MainDispatcherRule()
 
+    @Test fun summaryCannotLeakHiddenPromptReplyOrUnselectedVariant() = runTest(mainDispatcherRule.testDispatcher) {
+        val history = FakeHistoryRepository()
+        history.messages.value = listOf(
+            ChatMessageEntity(id = 1, text = "Allowed", isFromUser = true),
+            ChatMessageEntity(id = 2, text = "Secret", isFromUser = true, contextStatus = "EXCLUDED"),
+            ChatMessageEntity(id = 3, text = "Secret echo", isFromUser = false, replyToId = 2),
+            ChatMessageEntity(id = 4, text = "Old variant", isFromUser = false, replyToId = 1, isSelectedVariant = false),
+        )
+        var captured: ChatRequest? = null
+        val model = ChatViewModel(object : GeminiRepository {
+            override suspend fun generate(request: ChatRequest): GeminiResult {
+                captured = request
+                return GeminiResult.Success("Summary")
+            }
+        }, history, ioDispatcher = mainDispatcherRule.testDispatcher)
+        advanceUntilIdle()
+        model.summarizeChat()
+        advanceUntilIdle()
+        assertTrue(captured!!.currentMessage.contains("Allowed"))
+        assertFalse(captured!!.currentMessage.contains("Secret"))
+        assertFalse(captured!!.currentMessage.contains("Old variant"))
+        assertFalse(model.uiState.value.isSummarizing)
+    }
+
+    @Test fun chatCannotSwitchWhileSummaryIsRunning() = runTest(mainDispatcherRule.testDispatcher) {
+        val history = FakeHistoryRepository()
+        history.messages.value = listOf(ChatMessageEntity(id = 1, text = "Allowed", isFromUser = true))
+        val gate = kotlinx.coroutines.CompletableDeferred<GeminiResult>()
+        val model = ChatViewModel(object : GeminiRepository {
+            override suspend fun generate(request: ChatRequest) = gate.await()
+        }, history, ioDispatcher = mainDispatcherRule.testDispatcher)
+        advanceUntilIdle()
+        model.summarizeChat()
+        model.selectChat(2)
+        assertEquals(1L, model.uiState.value.activeChatId)
+        gate.complete(GeminiResult.Success("Summary"))
+        advanceUntilIdle()
+    }
+
     @Test fun emptyPromptShowsValidationError() = runTest(mainDispatcherRule.testDispatcher) {
         val viewModel = createViewModel(GeminiResult.Success("unused"))
         viewModel.onSend()

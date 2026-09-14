@@ -56,7 +56,11 @@ interface ChatSessionDao {
         WHERE m.chatId != :currentChatId
           AND m.role = 'USER'
           AND m.requestStatus = 'COMPLETE'
-          AND m.contextStatus != 'EXCLUDED'
+          AND m.contextStatus IN ('INCLUDED', 'PROTECTED')
+          AND m.isSelectedVariant = 1
+          AND EXISTS (SELECT 1 FROM chat_sessions AS destination
+                      WHERE destination.id = :currentChatId
+                        AND destination.securityLevel IN ('OPEN', 'PRIVATE'))
           AND (
               s.securityLevel = 'OPEN'
               OR (s.securityLevel = 'PRIVATE' AND m.contextStatus = 'PROTECTED')

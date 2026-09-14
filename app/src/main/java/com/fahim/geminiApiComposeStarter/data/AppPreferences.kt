@@ -20,30 +20,35 @@ class AppPreferences(private val context: Context) {
     private val instructionsKey = stringPreferencesKey("custom_instructions")
     private val themeModeKey = stringPreferencesKey("theme_mode")
 
-    val state: Flow<AppPreferencesState> = context.appDataStore.data.map {
+    val state: Flow<AppPreferencesState> get() = stateForChat(1)
+
+    private fun draftKeyFor(chatId: Long) = if (chatId == 1L) draftKey else stringPreferencesKey("draft_$chatId")
+    private fun instructionsKeyFor(chatId: Long) = if (chatId == 1L) instructionsKey else stringPreferencesKey("instructions_$chatId")
+
+    fun stateForChat(chatId: Long): Flow<AppPreferencesState> = context.appDataStore.data.map {
         AppPreferencesState(
-            draft = it[draftKey].orEmpty(),
-            customInstructions = it[instructionsKey].orEmpty(),
+            draft = it[draftKeyFor(chatId)].orEmpty(),
+            customInstructions = it[instructionsKeyFor(chatId)].orEmpty(),
             themeMode = it[themeModeKey] ?: "SYSTEM",
         )
     }
 
-    suspend fun setDraft(value: String) {
-        context.appDataStore.edit { it[draftKey] = value }
+    suspend fun setDraft(value: String, chatId: Long = 1) {
+        context.appDataStore.edit { it[draftKeyFor(chatId)] = value }
     }
 
-    suspend fun setCustomInstructions(value: String) {
-        context.appDataStore.edit { it[instructionsKey] = value }
+    suspend fun setCustomInstructions(value: String, chatId: Long = 1) {
+        context.appDataStore.edit { it[instructionsKeyFor(chatId)] = value }
     }
 
     suspend fun setThemeMode(value: String) {
         context.appDataStore.edit { it[themeModeKey] = value }
     }
 
-    suspend fun clearUserPreferences() {
+    suspend fun clearUserPreferences(chatId: Long = 1) {
         context.appDataStore.edit {
-            it.remove(draftKey)
-            it.remove(instructionsKey)
+            it.remove(draftKeyFor(chatId))
+            it.remove(instructionsKeyFor(chatId))
         }
     }
 }

@@ -466,19 +466,18 @@ private fun ContextSummaryCard(
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "Context · " + state.contextHealth.name.replace('_', ' ').lowercase()
-                            .replaceFirstChar { it.titlecase() },
+                        if (state.contextBlocked) "Context needs attention" else "Next request · ${state.nextContextIds.size} messages",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        "~${state.estimatedTokens} tokens  •  ${state.protectedCount} pinned  •  ${state.excludedCount} hidden",
+                        "~${state.estimatedTokens} / 24,000 tokens · ${state.crossChatMemoryCount} memories",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
+                        maxLines = 2,
                     )
                 }
-                IconButton(onClick = onSummarize, enabled = !state.isSummarizing) {
+                IconButton(onClick = onSummarize, enabled = !state.isSummarizing && !state.isLoading) {
                     if (state.isSummarizing) {
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                     } else {
@@ -487,6 +486,17 @@ private fun ContextSummaryCard(
                 }
                 TextButton(onClick = onOpen, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Manage") }
             }
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { (state.estimatedTokens / 24000f).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                "${state.securityLevel.label} · ${state.excludedCount} hidden · ${state.protectedCount} pinned",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp),
+            )
             if (state.trimmedCount > 0) {
                 Text(
                     state.trimmedCount.toString() + " older messages will be left out of the next request.",
@@ -1030,16 +1040,33 @@ private fun ContextSheet(
                     Text("Context controls", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Close context controls") }
                 }
-                Text("You decide what Gemini may use. Size is approximate.")
+                Text("Preview the next request", style = MaterialTheme.typography.titleMedium)
+                Text("This preview includes allowed chat history and shared memory. Token counts are estimates.", style = MaterialTheme.typography.bodySmall)
             }
             item {
                 LinearProgressIndicator(progress = { (state.estimatedTokens / 24000f).coerceIn(0f, 1f) }, Modifier.fillMaxWidth())
                 Text(state.estimatedTokens.toString() + " tokens · " + state.protectedCount + " protected · " + state.excludedCount + " excluded")
             }
             item {
+                Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("${state.nextContextIds.size} messages selected · ${state.trimmedCount} omitted", fontWeight = FontWeight.SemiBold)
+                        Text(if (state.contextBlocked) "Request blocked: shorten your prompt or reduce pinned context." else "${state.crossChatMemoryCount} details from other chats are included.", style = MaterialTheme.typography.bodySmall)
+                        Text("Hiding affects future requests. It cannot undo messages already sent to Gemini. Replies to hidden prompts are also left out.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            if (state.memoryPreview.isNotEmpty()) item {
+                Text("Shared memory in this request", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                state.memoryPreview.forEach { detail ->
+                    Text("• $detail", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 4.dp))
+                }
+                Text("To remove a detail, hide it in its original chat. Confidential mode turns off all shared memory.", style = MaterialTheme.typography.bodySmall)
+            }
+            item {
                 Text("Messages sent next time", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    "Use includes a message, Hide keeps it only on this device, and Pin prioritizes it when context is trimmed.",
+                    "Use allows a message if it fits. Hide excludes it from future requests. Pin preserves it during trimming and allows user details to be shared in Protected memory mode.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1049,12 +1076,12 @@ private fun ContextSheet(
             }.asReversed()
             if (controllable.isEmpty()) item { Text("Send a message to start managing context.") }
             items(controllable, key = { "context-" + it.id }) { message ->
-                ContextMessageControl(message, onStatus)
+                ContextMessageControl(message, message.id in state.nextContextIds, onStatus)
             }
             item {
                 HorizontalDivider()
                 Spacer(Modifier.height(4.dp))
-                Text("Custom AI instructions", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("Instructions for this chat", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 OutlinedTextField(
                     state.customInstructions,
                     onInstructions,
@@ -1065,7 +1092,8 @@ private fun ContextSheet(
                 TextButton(onClick = onReset, enabled = state.customInstructions.isNotBlank()) { Text("Reset instructions") }
             }
             item {
-                Button(onClick = onSummarize, enabled = !state.isSummarizing && state.messages.any { !it.isSummary }, modifier = Modifier.fillMaxWidth().testTag("summarize_button")) {
+                Text("Summarizing sends the allowed messages in this chat to Gemini. The resulting summary is saved locally and excluded from future context.", style = MaterialTheme.typography.bodySmall)
+                Button(onClick = onSummarize, enabled = !state.isLoading && !state.isSummarizing && state.messages.any { !it.isSummary }, modifier = Modifier.fillMaxWidth().testTag("summarize_button")) {
                     Icon(Icons.Default.Summarize, null); Spacer(Modifier.width(8.dp)); Text(if (state.isSummarizing) "Summarizing…" else "Summarize allowed chat")
                 }
             }
@@ -1075,16 +1103,16 @@ private fun ContextSheet(
 }
 
 @Composable
-private fun ContextMessageControl(message: ChatMessage, onStatus: (Long, ContextStatus) -> Unit) {
+private fun ContextMessageControl(message: ChatMessage, selectedForRequest: Boolean, onStatus: (Long, ContextStatus) -> Unit) {
     OutlinedCard(Modifier.fillMaxWidth().testTag("context_message_${message.id}")) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(if (message.isFromUser) "You" else "Gemini", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
                 Text(
-                    when (message.contextStatus) {
-                        ContextStatus.INCLUDED -> "Will be used"
-                        ContextStatus.EXCLUDED -> "Stays on device"
-                        ContextStatus.PROTECTED -> "Priority context"
+                    when {
+                        message.contextStatus == ContextStatus.EXCLUDED -> "Hidden from future requests"
+                        selectedForRequest -> "Selected for next request"
+                        else -> "Not selected for next request"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1149,8 +1177,13 @@ private fun PrivacySheet(
             Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text("Privacy & Security Center", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text("Control how this app looks and how this conversation can contribute to memory.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Privacy & appearance", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("${state.securityLevel.label} is active", fontWeight = FontWeight.Bold)
+                    Text("${if (state.securityLevel == ChatSecurityLevel.CONFIDENTIAL) "No memory is shared between chats." else "Review shared details in Context controls."} Your prompt and selected context are still sent to Gemini to get an answer.", style = MaterialTheme.typography.bodyMedium)
+                }
+            }
             Text("Appearance", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ThemeMode.entries.forEach { mode ->
@@ -1184,13 +1217,14 @@ private fun PrivacySheet(
                     Icon(Icons.Default.Memory, contentDescription = null)
                     Spacer(Modifier.width(12.dp))
                     Column {
-                        Text("Memory used in this chat", fontWeight = FontWeight.SemiBold)
+                        Text("Memory selected for next request", fontWeight = FontWeight.SemiBold)
                         Text("${state.crossChatMemoryCount} approved detail${if (state.crossChatMemoryCount == 1) "" else "s"} from other chats", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
             Text("Encrypted key: " + if (state.apiKeyConfigured) "configured" else "not configured")
             Text("Local Room records: " + state.messages.size)
+            Text("Chat history is stored in this app's local database; it is not encrypted by this app. Confidential controls sharing between chats, not device access or Google's data retention.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (state.apiKeyNeedsRecovery) Text("An unreadable encrypted key was safely removed.", color = MaterialTheme.colorScheme.error)
             HorizontalDivider()
             Text("The API key is encrypted at rest with AES-256-GCM and Android Keystore. It is decrypted only in memory for a request.")
