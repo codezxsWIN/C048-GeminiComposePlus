@@ -61,6 +61,7 @@ fun ChatRoute(viewModel: ChatViewModel, widthSizeClass: WindowWidthSizeClass) {
         viewModel::clearDraftAndInstructions, viewModel::clearEncryptedApiKey,
         viewModel::selectChat, viewModel::newChat, viewModel::renameChat, viewModel::setSecurityLevel,
         viewModel::setThemeMode, viewModel::deleteActiveChat,
+        viewModel::beginEdit, viewModel::cancelEdit, viewModel::onChatSearchChange,
         voice.isListening, voice.isAvailable, voice.toggle,
     )
 }
@@ -93,6 +94,9 @@ fun ChatScreen(
     onSecurityLevel: (ChatSecurityLevel) -> Unit = {},
     onThemeMode: (ThemeMode) -> Unit = {},
     onDeleteChat: () -> Unit = {},
+    onBeginEdit: (Long) -> Unit = {},
+    onCancelEdit: () -> Unit = {},
+    onChatSearchChange: (String) -> Unit = {},
     isVoiceListening: Boolean,
     isVoiceAvailable: Boolean,
     onVoiceInput: () -> Unit,
@@ -143,6 +147,7 @@ fun ChatScreen(
                 onSelectChat = { id -> onSelectChat(id); scope.launch { drawerState.close() } },
                 onNewChat = { onNewChat(); scope.launch { drawerState.close() } },
                 onRenameChat = onRenameChat,
+                onSearchChange = onChatSearchChange,
             )
         },
     ) {
@@ -235,7 +240,7 @@ fun ChatScreen(
                                 onStatus = onContextStatus,
                                 onDeleteSummary = onDeleteSummary,
                                 onDeleteMessage = onDeleteMessage,
-                                onEdit = onPromptChange,
+                                onEdit = onBeginEdit,
                                 onRetry = onRetry,
                                 onRegenerate = onRegenerate,
                                 onSelectVariant = onSelectVariant,
@@ -253,7 +258,7 @@ fun ChatScreen(
                             }
                         }
                     }
-                    PromptBar(state, onPromptChange, onSend, isVoiceListening, isVoiceAvailable, onVoiceInput)
+                    PromptBar(state, onPromptChange, onSend, onCancelEdit, isVoiceListening, isVoiceAvailable, onVoiceInput)
                 }
                 if (!nearBottom && state.messages.isNotEmpty()) {
                     FloatingActionButton(
@@ -305,6 +310,7 @@ private fun ChatDrawer(
     onSelectChat: (Long) -> Unit,
     onNewChat: () -> Unit,
     onRenameChat: (String) -> Unit,
+    onSearchChange: (String) -> Unit,
 ) {
     var renaming by remember { mutableStateOf(false) }
     var title by remember(state.activeChatId) {
@@ -329,22 +335,57 @@ private fun ChatDrawer(
                     Spacer(Modifier.width(8.dp))
                     Text("Start a new chat")
                 }
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = state.chatSearchQuery,
+                    onValueChange = onSearchChange,
+                    modifier = Modifier.fillMaxWidth().testTag("chat_search"),
+                    singleLine = true,
+                    placeholder = { Text("Search conversations") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = if (state.chatSearchQuery.isNotEmpty()) ({
+                        IconButton(onClick = { onSearchChange("") }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear search")
+                        }
+                    }) else null,
+                    shape = RoundedCornerShape(16.dp),
+                )
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Text(
-                "RECENT CHATS",
+                if (state.chatSearchQuery.isBlank()) "RECENT CHATS" else "SEARCH RESULTS",
                 Modifier.padding(start = 20.dp, top = 18.dp, bottom = 8.dp),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            LazyColumn(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(state.chats, key = { it.id }) { chat ->
+            val displayedChats = if (state.chatSearchQuery.isBlank()) state.chats else state.chatSearchResults
+            if (displayedChats.isEmpty() && state.chatSearchQuery.isNotBlank()) {
+                Column(
+                    Modifier.weight(1f).fillMaxWidth().padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Icon(Icons.Default.SearchOff, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(12.dp))
+                    Text("No matching conversations", fontWeight = FontWeight.SemiBold)
+                    Text("Try a different word or phrase.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else LazyColumn(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(displayedChats, key = { it.id }) { chat ->
                     NavigationDrawerItem(
                         label = {
                             Column(Modifier.padding(vertical = 4.dp)) {
                                 Text(chat.title, maxLines = 1, fontWeight = if (chat.id == state.activeChatId) FontWeight.SemiBold else FontWeight.Normal)
                                 Text(chat.securityLevel.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                chat.matchPreview?.takeIf { it.isNotBlank() }?.let { preview ->
+                                    Text(
+                                        preview.replace('\n', ' '),
+                                        maxLines = 2,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                         },
                         selected = chat.id == state.activeChatId,
@@ -464,7 +505,7 @@ private fun ChatBubble(
     onStatus: (Long, ContextStatus) -> Unit,
     onDeleteSummary: () -> Unit,
     onDeleteMessage: (Long) -> Unit,
-    onEdit: (String) -> Unit,
+    onEdit: (Long) -> Unit,
     onRetry: () -> Unit,
     onRegenerate: (Long) -> Unit,
     onSelectVariant: (Long, Long) -> Unit,
@@ -520,8 +561,8 @@ private fun ChatBubble(
                                 )
                                 if (message.isFromUser) {
                                     DropdownMenuItem(
-                                        { Text("Edit in composer") },
-                                        { menu = false; onEdit(message.text) },
+                                        { Text("Edit and resend") },
+                                        { menu = false; onEdit(message.id) },
                                         leadingIcon = { Icon(Icons.Default.Edit, null) },
                                     )
                                 }
@@ -878,6 +919,7 @@ private fun PromptBar(
     state: ChatUiState,
     onChange: (String) -> Unit,
     onSend: () -> Unit,
+    onCancelEdit: () -> Unit,
     isVoiceListening: Boolean,
     isVoiceAvailable: Boolean,
     onVoice: () -> Unit,
@@ -892,6 +934,29 @@ private fun PromptBar(
         shadowElevation = 3.dp,
     ) {
         Column(Modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
+            if (state.editingMessageId != null) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp).testTag("edit_message_banner"),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    shape = RoundedCornerShape(16.dp),
+                ) {
+                    Row(
+                        Modifier.padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.EditNote, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Edit and resend", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                            Text("The original stays saved but leaves AI context.", style = MaterialTheme.typography.labelSmall)
+                        }
+                        IconButton(onClick = onCancelEdit, modifier = Modifier.size(40.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Cancel editing")
+                        }
+                    }
+                }
+            }
             OutlinedTextField(
                 state.prompt, onChange, Modifier.fillMaxWidth().testTag("prompt_field"),
                 placeholder = { Text("Message Gemini…") },
@@ -923,7 +988,10 @@ private fun PromptBar(
                             enabled = !state.isLoading && state.prompt.isNotBlank(),
                             modifier = Modifier.testTag("send_button"),
                         ) {
-                            Icon(Icons.AutoMirrored.Filled.Send, "Send")
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                if (state.editingMessageId != null) "Send edited message" else "Send",
+                            )
                         }
                     }
                 },
@@ -933,7 +1001,9 @@ private fun PromptBar(
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (isVoiceListening) {
+                if (state.editingMessageId != null) {
+                    Text("Correction will be sent as a new turn", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                } else if (isVoiceListening) {
                     CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(6.dp))
                     Text("Listening · tap stop when finished", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)

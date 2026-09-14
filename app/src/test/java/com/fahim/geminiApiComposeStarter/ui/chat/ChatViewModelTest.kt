@@ -97,6 +97,30 @@ class ChatViewModelTest {
         assertEquals(2, visible.variantIndex)
     }
 
+    @Test fun editAndResendKeepsOriginalAndCreatesACorrectedTurn() = runTest(mainDispatcherRule.testDispatcher) {
+        val history = FakeHistoryRepository()
+        val viewModel = createViewModel(GeminiResult.Success("Answer"), history)
+        viewModel.onPromptChange("Original question")
+        viewModel.onSend()
+        advanceUntilIdle()
+
+        val original = viewModel.uiState.value.messages.first { it.isFromUser }
+        viewModel.beginEdit(original.id)
+        assertEquals(original.id, viewModel.uiState.value.editingMessageId)
+        assertEquals("Original question", viewModel.uiState.value.prompt)
+
+        viewModel.onPromptChange("Corrected question")
+        viewModel.onSend()
+        advanceUntilIdle()
+
+        assertNull(viewModel.uiState.value.editingMessageId)
+        assertEquals(
+            listOf("Original question", "Corrected question"),
+            history.messages.value.filter { it.isFromUser }.map { it.text },
+        )
+        assertEquals(ContextStatus.EXCLUDED.name, history.messages.value.first { it.id == original.id }.contextStatus)
+    }
+
     private fun createViewModel(result: GeminiResult, history: FakeHistoryRepository = FakeHistoryRepository()) =
         ChatViewModel(
             repository = object : GeminiRepository { override suspend fun generate(request: ChatRequest) = result },

@@ -132,6 +132,32 @@ class ChatScreenTest {
         assertEquals(ChatSecurityLevel.CONFIDENTIAL, level)
     }
 
+    @Test fun editAndResendStateIsClearlyShown() {
+        composeRule.setContent {
+            TestScreen(ChatUiState(prompt = "Corrected prompt", editingMessageId = 7))
+        }
+        composeRule.onNodeWithTag("edit_message_banner").assertIsDisplayed()
+        composeRule.onNodeWithText("The original stays saved but leaves AI context.").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Send edited message").assertIsDisplayed()
+    }
+
+    @Test fun conversationSearchShowsMatchingPreview() {
+        composeRule.setContent {
+            TestScreen(
+                ChatUiState(
+                    chatSearchQuery = "compose",
+                    chatSearchResults = listOf(
+                        ChatTab(2, "Study notes", ChatSecurityLevel.PRIVATE, matchPreview = "Explain Jetpack Compose"),
+                    ),
+                ),
+            )
+        }
+        composeRule.onNodeWithContentDescription("Open chats").performClick()
+        composeRule.onNodeWithTag("chat_search").assertIsDisplayed()
+        composeRule.onNodeWithText("Study notes").assertIsDisplayed()
+        composeRule.onNodeWithText("Explain Jetpack Compose").assertIsDisplayed()
+    }
+
     @Composable
     private fun TestScreen(
         state: ChatUiState,

@@ -21,6 +21,8 @@ class RoomChatSessionRepository(
 
     suspend fun create(title: String = "New chat"): Long = dao.insert(ChatSessionEntity(title = title))
 
+    suspend fun search(query: String) = dao.search(query.trim())
+
     suspend fun rename(id: Long, title: String) {
         dao.updateTitle(id, title.trim().ifBlank { "New chat" })
     }

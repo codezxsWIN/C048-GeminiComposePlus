@@ -33,9 +33,15 @@ Choose Connected, Protected memory, or Confidential mode for each chat. The sele
 
 ### Multiple conversations
 
-Create, rename, delete, and switch between saved chats. Each chat keeps its own messages and privacy setting.
+Create, rename, delete, search, and switch between saved chats. Search checks both chat names and saved message text while each chat retains its own privacy setting.
 
 <img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/05-chat-drawer.png" alt="Multiple chat drawer" width="38%" />
+
+### Edit and resend
+
+Correct an earlier prompt directly from its message menu. The original remains visible locally but is excluded from future AI context when the correction is sent.
+
+<img src="https://github.com/codezxsWIN/C048-GeminiComposePlus/raw/refs/heads/C048-development/docs/images/13-edit-and-resend.png" alt="Edit and resend message action" width="38%" />
 
 ### Appearance
 

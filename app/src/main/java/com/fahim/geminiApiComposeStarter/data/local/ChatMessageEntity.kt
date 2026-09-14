@@ -17,6 +17,14 @@ data class ChatSessionEntity(
     val updatedAt: Long = createdAt,
 )
 
+data class ChatSearchRow(
+    val id: Long,
+    val title: String,
+    val securityLevel: String,
+    val updatedAt: Long,
+    val matchPreview: String?,
+)
+
 @Entity(tableName = "chat_messages")
 data class ChatMessageEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

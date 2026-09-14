@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 
 class ChatViewModel(
@@ -29,6 +30,7 @@ class ChatViewModel(
     private var failedRequestId: Long? = null
     private var failedPrompt: String? = null
     private var nextPromptFromVoice = false
+    private var searchJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -90,6 +92,43 @@ class ChatViewModel(
         updateMessagesAndContext()
     }
 
+    fun beginEdit(messageId: Long) {
+        val message = entities.firstOrNull { it.id == messageId && it.role == MessageRole.USER.name } ?: return
+        nextPromptFromVoice = false
+        _uiState.update { it.copy(prompt = message.text, editingMessageId = messageId, promptError = null) }
+        preferences?.let { viewModelScope.launch(ioDispatcher) { it.setDraft(message.text) } }
+    }
+
+    fun cancelEdit() {
+        _uiState.update { it.copy(prompt = "", editingMessageId = null, promptError = null) }
+        preferences?.let { viewModelScope.launch(ioDispatcher) { it.setDraft("") } }
+    }
+
+    fun onChatSearchChange(query: String) {
+        _uiState.update { it.copy(chatSearchQuery = query) }
+        searchJob?.cancel()
+        if (query.isBlank()) {
+            _uiState.update { it.copy(chatSearchResults = emptyList()) }
+            return
+        }
+        val repository = sessionRepository ?: return
+        searchJob = viewModelScope.launch(ioDispatcher) {
+            val results = repository.search(query).map { row ->
+                ChatTab(
+                    id = row.id,
+                    title = row.title,
+                    securityLevel = runCatching { ChatSecurityLevel.valueOf(row.securityLevel) }
+                        .getOrDefault(ChatSecurityLevel.PRIVATE),
+                    updatedAt = row.updatedAt,
+                    matchPreview = row.matchPreview,
+                )
+            }
+            _uiState.update { current ->
+                if (current.chatSearchQuery == query) current.copy(chatSearchResults = results) else current
+            }
+        }
+    }
+
     fun onVoiceResult(value: String) {
         nextPromptFromVoice = true
         _uiState.update { it.copy(prompt = value, promptError = null) }
@@ -118,6 +157,7 @@ class ChatViewModel(
                 prompt = "",
                 errorMessage = null,
                 promptError = null,
+                editingMessageId = null,
             )
         }
     }
@@ -126,7 +166,7 @@ class ChatViewModel(
             viewModelScope.launch(ioDispatcher) {
                 val id = repository.create()
                 historyRepository.selectChat(id)
-                _uiState.update { it.copy(activeChatId = id, prompt = "", errorMessage = null, promptError = null) }
+                _uiState.update { it.copy(activeChatId = id, prompt = "", editingMessageId = null, errorMessage = null, promptError = null) }
             }
         }
     }
@@ -236,11 +276,15 @@ class ChatViewModel(
             }
             "Respond in a professional, formal style. $content"
         } else raw
-        _uiState.update { it.copy(prompt = "", isLoading = true, errorMessage = null, promptError = null, canRetry = false) }
+        val editedMessageId = _uiState.value.editingMessageId
+        _uiState.update { it.copy(prompt = "", editingMessageId = null, isLoading = true, errorMessage = null, promptError = null, canRetry = false) }
         preferences?.let { viewModelScope.launch(ioDispatcher) { it.setDraft("") } }
         val voicePrompt = nextPromptFromVoice
         nextPromptFromVoice = false
         viewModelScope.launch {
+            if (editedMessageId != null) {
+                withContext(ioDispatcher) { historyRepository.setContextStatus(editedMessageId, ContextStatus.EXCLUDED) }
+            }
             val id = withContext(ioDispatcher) { historyRepository.addPendingUser(prompt) }
             executeRequest(id, prompt, wasVoicePrompt = voicePrompt)
         }

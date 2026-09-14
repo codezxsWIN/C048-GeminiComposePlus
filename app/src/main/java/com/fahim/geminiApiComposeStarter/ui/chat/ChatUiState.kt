@@ -24,9 +24,12 @@ data class ChatUiState(
     val apiKeyConfigured: Boolean = false,
     val apiKeyNeedsRecovery: Boolean = false,
     val chats: List<ChatTab> = emptyList(),
+    val chatSearchQuery: String = "",
+    val chatSearchResults: List<ChatTab> = emptyList(),
     val activeChatId: Long = 1,
     val securityLevel: ChatSecurityLevel = ChatSecurityLevel.PRIVATE,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val editingMessageId: Long? = null,
 )
 
 data class ChatTab(
@@ -34,6 +37,7 @@ data class ChatTab(
     val title: String,
     val securityLevel: ChatSecurityLevel,
     val updatedAt: Long = 0,
+    val matchPreview: String? = null,
 )
 
 enum class ThemeMode { SYSTEM, LIGHT, DARK }

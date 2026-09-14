@@ -14,6 +14,23 @@ interface ChatSessionDao {
     @Query("SELECT * FROM chat_sessions ORDER BY updatedAt DESC, id DESC")
     suspend fun getAll(): List<ChatSessionEntity>
 
+    @Query(
+        """
+        SELECT s.id, s.title, s.securityLevel, s.updatedAt,
+            (SELECT m.text FROM chat_messages AS m
+             WHERE m.chatId = s.id AND LOWER(m.text) LIKE '%' || LOWER(:query) || '%'
+             ORDER BY m.createdAt DESC, m.id DESC LIMIT 1) AS matchPreview
+        FROM chat_sessions AS s
+        WHERE LOWER(s.title) LIKE '%' || LOWER(:query) || '%'
+           OR EXISTS (
+               SELECT 1 FROM chat_messages AS m
+               WHERE m.chatId = s.id AND LOWER(m.text) LIKE '%' || LOWER(:query) || '%'
+           )
+        ORDER BY s.updatedAt DESC, s.id DESC
+        """,
+    )
+    suspend fun search(query: String): List<ChatSearchRow>
+
     @Insert
     suspend fun insert(session: ChatSessionEntity): Long
 
